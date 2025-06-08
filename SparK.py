@@ -57,14 +57,14 @@ def get_lines_stream(filename):
     If a data file is not tabix-indexed, go through it line by line.
     """
     if filename[-3:] == '.gz':
-        f = gzip.open(filename, 'r')
-        for line in f:
-            yield line.rstrip()
+        f = gzip.open(filename, 'rt')
     else:
         f = open(filename, 'r')
+    try:
         for line in f:
             yield line.rstrip()
-    f.close()
+    finally:
+        f.close()
 
 def make_raw_data_filled(stretch, files, offset):  # files[ctrl,treat]
     raw_data_filled = [[0] * (stretch[2] - stretch[1]) for r in range(len(files))]
