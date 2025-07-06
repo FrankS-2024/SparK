@@ -6,15 +6,15 @@ https://www.biorxiv.org/content/10.1101/845529v1.full
 Feature requests are welcome! For help, bug reports, and to request features please open a issue here on GitHub.
 
 
-<img src="https://github.com/harbourlab/SparK/blob/master/Summary.png" width="900">
+<img src="Images/Summary.png" width="900">
 
 Coming soon... interaction arcs for e.g. Hi-C, ChIA-PET, Hi-ChIP or any other interaction data! Preview:
-<img src="https://github.com/harbourlab/SparK/blob/master/Screen%20Shot%202020-01-23%20at%2010.32.30%20PM.png" width="300">
 
+<img src="Images/InteractionArcs.png" width="400">
 
 Plot NGS bedgraph tracks including replicates, averaging of replicates, track overlay, standard deviations, and a smart scale bar. Output files are true high-resolution vector graphics (.svg), for easy editing and customization.
 
-This tool uses bedgraph files to generate the figures. To convert BAM files to bedgraph files, you can use deeptools, with "bamCoverage -b bamfile.bam -o outputfilename.bdg -bs 1 -of bedgraph". Make sure to use the "-bs 1" option. This should not be done for ChIP-seq data! For ChIP-seq, use the bedgraphs from the MACS2 output (or any other ChIP-seq pipeline). To convert bigwig (bw) files to bedgraph files you can use for instance the USCS bigWigToBedGraph tool (https://genome.ucsc.edu/goldenpath/help/bigWig.html).
+This tool uses bedgraph files to generate the figures. To convert BAM files to bedgraph files, you can use deeptools, with "bamCoverage -b bamfile.bam -o outputfilename.bdg -bs 1 -of bedgraph". Make sure to use the "-bs 1" option. This should not be done for ChIP-seq data! For ChIP-seq, use the bedgraphs from the MACS2 output (or any other ChIP-seq pipeline). To convert bigwig (bw) files to bedgraph files you can use for instance the UCSC bigWigToBedGraph tool (https://genome.ucsc.edu/goldenpath/help/bigWig.html).
 
 For faster retrieval of data from regions of a bedgraph, compress your bedgraph files with [bgzip](http://www.htslib.org/doc/bgzip.html) and index them with [tabix](http://www.htslib.org/doc/tabix.html) using the command `tabix -p bed <filename>`.
 <pre>
@@ -95,7 +95,7 @@ Getting started:
 
 Plotting multiple NGS tracks. Example of a plot of 4 ChIP-seq tracks with standard settings.
 
-<img src="https://github.com/harbourlab/SparK/blob/master/FigureA.png" width="400">
+<img src="Images/FigureA.png" width="400">
 
 Code used to generate this plot:
 python SparK.py \
@@ -111,7 +111,7 @@ too many genes displayed here. To display all genes, run this without "-dg"
 
 Example of plotting the comparison of ChIP-seq data of two cell lines (HepG2 and K562).
 
-<img src="https://github.com/harbourlab/SparK/blob/master/FigureB.png" width="400">
+<img src="Images/FigureB.png" width="400">
 
 Code used to generate this plot:
 python SparK.py \
@@ -130,7 +130,7 @@ python SparK.py \
 Example comparing histone acetylation with RNA-seq. Of note! The overlap label will only be plotted when averages are plotted.
 Else, due to transparency issues, the overlap plotting multiple tracks is not clearly visible.
 
-<img src="https://github.com/harbourlab/SparK/blob/master/FigureE.png" width="400">
+<img src="Images/FigureE.png" width="400">
 
 Code:
 python SparK.py \
@@ -145,9 +145,9 @@ python SparK.py \
 -dg GAPDH
 
 
-Exaple of custom coloring tracks, and adding bed files with custom colors.
+Example of custom coloring tracks, and adding bed files with custom colors.
 
-<img src="https://github.com/harbourlab/SparK/blob/master/FigureC.png" width="400">
+<img src="Images/FigureC.png" width="400">
 
 Code used to generate this plot:
 python SparK.py \
@@ -169,13 +169,13 @@ python SparK.py \
 
 Example of different smoothing windows, applied with "-sm".
 
-<img src="https://github.com/harbourlab/SparK/blob/master/smoothing2.png" width="400">
+<img src="Images/smoothing2.png" width="400">
 
 
 
 Example of sparks (significant changes) beeing added to a plot with grey color scheme.
 
-<img src="https://github.com/harbourlab/SparK/blob/master/FigureD.png" width="400">
+<img src="Images/FigureD.png" width="400">
 
 Code used to generate this figure:
 python SparK.py \
@@ -194,7 +194,7 @@ python SparK.py \
 Other plot types:
 Spark allows to plot the standard deviation of NGS replicates:
 
-<img src="https://github.com/harbourlab/SparK/blob/master/FigureF.png" width="400">
+<img src="Images/FigureF.png" width="400">
 
 Code used:
 python SparK.py \
@@ -210,7 +210,7 @@ python SparK.py \
 
 Sine plot (experimental).
 
-<img src="https://github.com/harbourlab/SparK/blob/master/FigureG.png" width="400">
+<img src="Images/FigureG.png" width="400">
 
 python SparK.py \
 -pr chr12:6533612-6539012 \
@@ -228,7 +228,7 @@ python SparK.py \
 
 Modify gene annotations:
 
-<img src="https://github.com/harbourlab/SparK/blob/master/summary_genes.png" width="900">
+<img src="Images/summary_genes.png" width="900">
 
 A: Standard plot settings, all transcript IDs in the gtf file will be merged for each gene, and the
 first start_codon is annotated
@@ -254,4 +254,4 @@ Further, SparK expects the gene name, and transcript name to be in column 9 of t
 
 ### Dealing with methylation data/my data has the wrong y-Axis/looks different than in IGV:
 If you are working with data that has very sharp and narrow peaks, like methylation data, or plotting larger regions with data that has sharp peaks you might encounter the following: The y-axis indicates lower values for your data than what you expected, and your data looks different from what you have seen in IGV. If you plot a large region like 100 kb, then you have more data points than pixels in your plot. There are different ways of dealing with this, and SparK will calculate the average signal for each pixel of the plot. Say you have to squeeze 10 data points into each pixel of the plot, and you only have one methylation site (one single base) with a value of 1.0 for a stretch of 10 bases, then you will end up with an average value of 0.1 for that one pixel in the SparK plot. IGV will show you a peak with 1.0. when in default setting. See the attached example. I have plotted a larger region of methylation data with IGV, you can see that the data ranges to 1.0, which is what you were expecting. However, the data is so highly clustered that it really doesn't tell you anything. See for instance the red square (1). If we zoom in once, we can notice that what looked as one massive block of methylation is actually two distinct sites (2). Further, both sites seem to have the same amount of methylation. If we zoom in again, we can see that those two sites are not the same at all, but in fact very different in amount of methylation that is present (3). So even zooming in once doesn't give us meaningful data in IGV yet. In SparK plots the values don't go up to 1, but SparK plots depict a meaningful representation of the data, even in the most zoomed out version.
-<img src="https://github.com/harbourlab/SparK/blob/master/methylation_example.png" width="900">
+<img src="Images/methylation_example.png" width="900">
