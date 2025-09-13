@@ -73,63 +73,66 @@ def get_lines_stream(filename):
 def make_raw_data_filled(stretch, files, offset):  # files[ctrl,treat]
     raw_data_filled = [[0] * (stretch[2] - stretch[1]) for r in range(len(files))]
     for a, datafile2 in enumerate(files):
-        # Check to see whether the file is tabix-indexed. If so, use index for
-        # faster processing
-        for a, datafile2 in enumerate(files):
-            # Check to see whether the file is tabix-indexed. If so, use index for
-            # faster processing
-            if datafile2.lower().endswith(('.bw', '.bigwig')):
-                if pyBigWig is None:
-                    raise ImportError('pyBigWig library required for bigwig files')
-                bw = pyBigWig.open(datafile2)
-                chromname = stretch[0]
-                if chromname not in bw.chroms():
-                    if 'chr' + chromname in bw.chroms():
-                        chromname = 'chr' + chromname
-                values = bw.values(chromname, stretch[1] + offset, stretch[2] + offset)
-                for idx, val in enumerate(values):
-                    raw_data_filled[a][idx] = 0 if val is None else val
-                bw.close()
-                continue
-            input_lines = None
-            found_chromosome = False
-            if os.path.isfile('{}.tbi'.format(datafile2)):
-                input_lines = get_lines_tabix(datafile2, stretch)
-                # Lines will already be in the specified interval.
-                found_chromosome = True
-            else:
-                print("WARNING: {} is not tabix-indexed.".format(datafile2), \
-                    file=sys.stderr)
-                print("To speed up, compress with bgzip and index with tabix.", \
-                    file=sys.stderr)
-                input_lines = get_lines_stream(datafile2)
-        
-            for line in input_lines:
-                line_split = line.split("\t")
-                try:
-                    if line_split[0][:3] == "chr" or line_split[0][:3] == "Chr":
-                        line_split[0] = line_split[0][3:]
-                except:
-                    pass
-                if found_chromosome and line_split[0] != stretch[0]:
-                    break
-
-                if line_split[0] == stretch[0]:
+        # BigWig support via pyBigWig
+        if datafile2.lower().endswith(('.bw', '.bigwig')):
+            if pyBigWig is None:
+                raise ImportError('pyBigWig library required for bigwig files')
+            bw = pyBigWig.open(datafile2)
+            chromname = stretch[0]
+            if chromname not in bw.chroms():
+                if 'chr' + chromname in bw.chroms():
+                    chromname = 'chr' + chromname
+            values = bw.values(chromname, stretch[1] + offset, stretch[2] + offset)
+            for idx, val in enumerate(values):
+                # Replace None or NaN with 0 to avoid broken polygons
+                if val is None:
+                    raw_data_filled[a][idx] = 0
+                else:
                     try:
-                        line_split[3] = float(line_split[3].split("\n")[0])
-                    except:
-                        print("Warning! Could not import following row from: " + datafile2)
-                        print(line)
-                        print("Continuing to Import...")
-                        print("")
-                    found_chromosome = True
-                    if int(line_split[2]) >= stretch[1] + offset:
-                        if int(line_split[1]) <= stretch[2] + offset:
-                            for iteration in range(int(line_split[2]) - int(line_split[1])):
-                                try:
-                                    raw_data_filled[a][int(line_split[1]) + iteration - stretch[1] + offset] = line_split[3]
-                                except:
-                                    pass
+                        raw_data_filled[a][idx] = 0 if math.isnan(val) else val
+                    except TypeError:
+                        raw_data_filled[a][idx] = 0
+            bw.close()
+            continue
+
+        # BedGraph/other line-based inputs (optionally via tabix)
+        input_lines = None
+        found_chromosome = False
+        if os.path.isfile('{}.tbi'.format(datafile2)):
+            input_lines = get_lines_tabix(datafile2, stretch)
+            # Lines will already be in the specified interval.
+            found_chromosome = True
+        else:
+            print("WARNING: {} is not tabix-indexed.".format(datafile2), file=sys.stderr)
+            print("To speed up, compress with bgzip and index with tabix.", file=sys.stderr)
+            input_lines = get_lines_stream(datafile2)
+
+        for line in input_lines:
+            line_split = line.split("\t")
+            try:
+                if line_split[0][:3] == "chr" or line_split[0][:3] == "Chr":
+                    line_split[0] = line_split[0][3:]
+            except:
+                pass
+            if found_chromosome and line_split[0] != stretch[0]:
+                break
+
+            if line_split[0] == stretch[0]:
+                try:
+                    line_split[3] = float(line_split[3].split("\n")[0])
+                except:
+                    print("Warning! Could not import following row from: " + datafile2)
+                    print(line)
+                    print("Continuing to Import...")
+                    print("")
+                found_chromosome = True
+                if int(line_split[2]) >= stretch[1] + offset:
+                    if int(line_split[1]) <= stretch[2] + offset:
+                        for iteration in range(int(line_split[2]) - int(line_split[1])):
+                            try:
+                                raw_data_filled[a][int(line_split[1]) + iteration - stretch[1] + offset] = line_split[3]
+                            except:
+                                pass
 
     # shrink to max_datapoints if bigger
     max_datapoints = max_points
@@ -198,6 +201,10 @@ def get_relative_hight(raw_value): # FIX make sure maxvalue can be 0 too
         return(0)
     else:
         return((raw_value * hight * relative_track_hight_percentage) / max_value) # to not go up to the max
+def get_relative_hight_custom(raw_value, denom):
+    if raw_value == 0 or denom == 0:
+        return 0
+    return (raw_value * hight * relative_track_hight_percentage) / denom
 def draw_rect(x_coord, y_0, color, width, hight1, opacity):
     return '''<rect x="''' + str(x_coord) + '''" opacity="''' + str(opacity) + '''" y="''' + str(y_0 - hight1) + '''" fill="''' + color + '''" width="''' + str(width) + '''" height="''' + str(hight1) + '''"/>'''
 def draw_polygon(coordinates, opacity, color, stroke_width):
@@ -211,6 +218,38 @@ def draw_polygon(coordinates, opacity, color, stroke_width):
             string += " " + str(c[1]) + "," + str(c[0])
     string += '''" opacity="''' + str(opacity) + '''" fill="''' + color + '''"''' + ''' stroke="black" stroke-width="''' + str(stroke_width) + '''"/>'''
     return string
+def draw_axis_for_group(y_start_val, max_value_val, has_negative_axis):
+    axis_label = round(max_value_val * (1 + (1 - relative_track_hight_percentage)), 1)
+    if has_negative_axis:
+        write_to_file('''<line x1="''' + str(x_start - 10) + '''" y1="''' + str(y_start_val + hight) + '''" x2="''' + str(x_start - 10) + '''" y2="''' + str(y_start_val - hight) + '''" stroke="black" stroke-width="1" />''')
+        write_to_file('''<line x1="''' + str(x_start - 10.5) + '''" y1="''' + str(y_start_val) + '''" x2="''' + str(x_start - 6.5) + '''" y2="''' + str(y_start_val) + '''" stroke="black" stroke-width="1" />''')
+        write_to_file('''<line x1="''' + str(x_start - 10.5) + '''" y1="''' + str(y_start_val - hight) + '''" x2="''' + str(x_start - 6.5) + '''" y2="''' + str(y_start_val - hight) + '''" stroke="black" stroke-width="1" />''')
+        write_to_file('''<line x1="''' + str(x_start - 10.5) + '''" y1="''' + str(y_start_val + hight) + '''" x2="''' + str(x_start - 6.5) + '''" y2="''' + str(y_start_val + hight) + '''" stroke="black" stroke-width="1" />''')
+
+        write_to_file('''<text text-anchor="end" font-family="Arial" x="''' + str(x_start - 14) + '''" y="''' + str(y_start_val + hight + 4) + '''" font-size="''' + str(font_size_axis_y) + '''" >''' + str(-axis_label) + '''</text>''')
+        write_to_file('''<text text-anchor="end" font-family="Arial" x="''' + str(x_start - 14) + '''" y="''' + str(y_start_val + 4) + '''" font-size="''' + str(font_size_axis_y) + '''" >0</text>''')
+        write_to_file('''<text text-anchor="end" font-family="Arial" x="''' + str(x_start - 14) + '''" y="''' + str(y_start_val - hight + 4) + '''" font-size="''' + str(font_size_axis_y) + '''" >''' + str(axis_label) + '''</text>''')
+    else:
+        write_to_file('''<line x1="''' + str(x_start - 10) + '''" y1="''' + str(y_start_val) + '''" x2="''' + str(x_start - 10) + '''" y2="''' + str(y_start_val - hight) + '''" stroke="black" stroke-width="1" />''')
+        write_to_file('''<line x1="''' + str(x_start - 10.5) + '''" y1="''' + str(y_start_val) + '''" x2="''' + str(x_start - 6.5) + '''" y2="''' + str(y_start_val) + '''" stroke="black" stroke-width="1" />''')
+        write_to_file('''<line x1="''' + str(x_start - 10.5) + '''" y1="''' + str(y_start_val - hight) + '''" x2="''' + str(x_start - 6.5) + '''" y2="''' + str(y_start_val - hight) + '''" stroke="black" stroke-width="1" />''')
+
+        write_to_file('''<text text-anchor="end" font-family="Arial" x="''' + str(x_start - 14) + '''" y="''' + str(y_start_val + 4) + '''" font-size="''' + str(font_size_axis_y) + '''" >0</text>''')
+        write_to_file('''<text text-anchor="end" font-family="Arial" x="''' + str(x_start - 14) + '''" y="''' + str(y_start_val - hight + 4) + '''" font-size="''' + str(font_size_axis_y) + '''" >''' + str(axis_label) + '''</text>''')
+def draw_sine_axis_for_group(y_start_val, pos_max_value_val, neg_max_value_val):
+    # Separate top/bottom labels derived from positive and negative datasets
+    axis_label_top = round(pos_max_value_val * (1 + (1 - relative_track_hight_percentage)), 1)
+    axis_label_bottom = round(neg_max_value_val * (1 + (1 - relative_track_hight_percentage)), 1)
+    # Draw vertical axis
+    write_to_file('''<line x1="''' + str(x_start - 10) + '''" y1="''' + str(y_start_val + hight) + '''" x2="''' + str(x_start - 10) + '''" y2="''' + str(y_start_val - hight) + '''" stroke="black" stroke-width="1" />''')
+    # 0 tick
+    write_to_file('''<line x1="''' + str(x_start - 10.5) + '''" y1="''' + str(y_start_val) + '''" x2="''' + str(x_start - 6.5) + '''" y2="''' + str(y_start_val) + '''" stroke="black" stroke-width="1" />''')
+    # Top tick and label
+    write_to_file('''<line x1="''' + str(x_start - 10.5) + '''" y1="''' + str(y_start_val - hight) + '''" x2="''' + str(x_start - 6.5) + '''" y2="''' + str(y_start_val - hight) + '''" stroke="black" stroke-width="1" />''')
+    write_to_file('''<text text-anchor="end" font-family="Arial" x="''' + str(x_start - 14) + '''" y="''' + str(y_start_val - hight + 4) + '''" font-size="''' + str(font_size_axis_y) + '''" >''' + str(axis_label_top) + '''</text>''')
+    # Bottom tick and label
+    write_to_file('''<line x1="''' + str(x_start - 10.5) + '''" y1="''' + str(y_start_val + hight) + '''" x2="''' + str(x_start - 6.5) + '''" y2="''' + str(y_start_val + hight) + '''" stroke="black" stroke-width="1" />''')
+    write_to_file('''<text text-anchor="end" font-family="Arial" x="''' + str(x_start - 14) + '''" y="''' + str(y_start_val + hight + 4) + '''" font-size="''' + str(font_size_axis_y) + '''" >-''' + str(axis_label_bottom) + '''</text>''')
 def draw_standard_spark():
     summary_func = np.max if point_stat == "max" else np.average
     if len(control_data) > 1 and len(treat_data) > 1:
@@ -672,6 +711,9 @@ for group in range(nr_of_groups):
 
             draw_standard_spark()
 
+        # Draw y-axis for this group (standard)
+        draw_axis_for_group(y_start, max_value, has_negative)
+
     elif plot_type == "STD":
         if len(control_data) > 1 and len(treat_data) > 1:
             coords = []
@@ -701,16 +743,34 @@ for group in range(nr_of_groups):
 
             if spark == "yes":
                 draw_standard_spark()
+
+            # Draw y-axis for this group (STD)
+            draw_axis_for_group(y_start, max_value, has_negative)
         else:
             print("Error: STD plots require at least 2 control and treatment files per plot")
 
     elif plot_type == "sine": # treat points up, control points down #FIX combined with averages does not work
+        # Compute separate positive/negative maxima for independent axis labels and scaling
+        pos_max_value = 0
+        neg_max_value = 0
+        if treat_data:
+            pos_max_value = max(max(abs(v) for v in data) for data in treat_data)
+        if control_data:
+            neg_max_value = max(max(abs(v) for v in data) for data in control_data)
+        # Respect custom scales or group autoscale by overriding both sides equally
+        if custom_scales is not None and custom_scales[group] != "D":
+            pos_max_value = float(custom_scales[group])
+            neg_max_value = float(custom_scales[group])
+        elif group_autoscale == "yes" and ((group + 1) not in group_autoscale_excluded):
+            pos_max_value = max_value
+            neg_max_value = max_value
+
         if len(control_data) >= 1 and len(treat_data) >= 1:
             for datafile in control_data:
                 coords = []  # y, x
                 for x, value in enumerate(datafile):
                     x_pos = x_start + (x * quantile)
-                    coords.append([get_relative_hight(-value), x_pos])
+                    coords.append([-1 * get_relative_hight_custom(value, neg_max_value), x_pos])
                 coords[-1][0] = 0
                 coords[0][0] = 0
                 write_to_file(draw_polygon(coords, opacity, fills[0], stroke_width))
@@ -718,7 +778,7 @@ for group in range(nr_of_groups):
                 coords = []  # y, x
                 for x, value in enumerate(datafile):
                     x_pos = x_start + (x * quantile)
-                    coords.append([get_relative_hight(value), x_pos])
+                    coords.append([get_relative_hight_custom(value, pos_max_value), x_pos])
                 coords[-1][0] = 0
                 coords[0][0] = 0
                 write_to_file(draw_polygon(coords, opacity, fills[1], stroke_width))
@@ -797,26 +857,8 @@ for group in range(nr_of_groups):
                         write_to_file(draw_polygon(coords, 0.8, spark_color[1], stroke_width_spark))
         else:
             print("Error: no input files for treatment and/or control")
-
-# Draw axis and labels
-##################################################
-axis_label = round(max_value*(1+(1-relative_track_hight_percentage)), 1)
-if has_negative:
-    write_to_file('''<line x1="''' + str(x_start - 10) + '''" y1="''' + str(y_start + hight) + '''" x2="''' + str(x_start - 10) + '''" y2="''' + str(y_start - hight) + '''" stroke="black" stroke-width="1" />''')
-    write_to_file('''<line x1="''' + str(x_start - 10.5) + '''" y1="''' + str(y_start) + '''" x2="''' + str(x_start - 6.5) + '''" y2="''' + str(y_start) + '''" stroke="black" stroke-width="1" />''')
-    write_to_file('''<line x1="''' + str(x_start - 10.5) + '''" y1="''' + str(y_start - hight) + '''" x2="''' + str(x_start - 6.5) + '''" y2="''' + str(y_start - hight) + '''" stroke="black" stroke-width="1" />''')
-    write_to_file('''<line x1="''' + str(x_start - 10.5) + '''" y1="''' + str(y_start + hight) + '''" x2="''' + str(x_start - 6.5) + '''" y2="''' + str(y_start + hight) + '''" stroke="black" stroke-width="1" />''')
-
-    write_to_file('''<text text-anchor="end" font-family="Arial" x="''' + str(x_start - 14) + '''" y="''' + str(y_start + hight + 4) + '''" font-size="''' + str(font_size_axis_y) + '''" >''' + str(-axis_label) + '''</text>''')
-    write_to_file('''<text text-anchor="end" font-family="Arial" x="''' + str(x_start - 14) + '''" y="''' + str(y_start + 4) + '''" font-size="''' + str(font_size_axis_y) + '''" >0</text>''')
-    write_to_file('''<text text-anchor="end" font-family="Arial" x="''' + str(x_start - 14) + '''" y="''' + str(y_start - hight + 4) + '''" font-size="''' + str(font_size_axis_y) + '''" >''' + str(axis_label) + '''</text>''')
-else:
-    write_to_file('''<line x1="''' + str(x_start - 10) + '''" y1="''' + str(y_start) + '''" x2="''' + str(x_start - 10) + '''" y2="''' + str(y_start - hight) + '''" stroke="black" stroke-width="1" />''')
-    write_to_file('''<line x1="''' + str(x_start - 10.5) + '''" y1="''' + str(y_start) + '''" x2="''' + str(x_start - 6.5) + '''" y2="''' + str(y_start) + '''" stroke="black" stroke-width="1" />''')
-    write_to_file('''<line x1="''' + str(x_start - 10.5) + '''" y1="''' + str(y_start - hight) + '''" x2="''' + str(x_start - 6.5) + '''" y2="''' + str(y_start - hight) + '''" stroke="black" stroke-width="1" />''')
-
-    write_to_file('''<text text-anchor="end" font-family="Arial" x="''' + str(x_start - 14) + '''" y="''' + str(y_start + 4) + '''" font-size="''' + str(font_size_axis_y) + '''" >0</text>''')
-    write_to_file('''<text text-anchor="end" font-family="Arial" x="''' + str(x_start - 14) + '''" y="''' + str(y_start - hight + 4) + '''" font-size="''' + str(font_size_axis_y) + '''" >''' + str(axis_label) + '''</text>''')
+        # Draw y-axis for this group (sine) with independent labels
+        draw_sine_axis_for_group(y_start, pos_max_value, neg_max_value)
 
 # Scalebar
 if display_scalebar == "yes":
