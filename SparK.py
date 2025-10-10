@@ -1,9 +1,4 @@
-SparK_Version = "2.6.2"
-# Stefan Kurtenbach
-# Stefan.Kurtenbach@me.com
-
-# FIX what happens if region is smaller than 2000?
-# could make resolution choosable. 2000 now
+SparK_Version = "3.0"
 
 import numpy as np
 import copy
@@ -1094,5 +1089,6 @@ if gff_file is not None:
                                             arrow_coords = [[y_0, x_0], [y_0 + (hight * 0.8), x_0], [y_0 + (hight * 0.8), x_0 - (width * 0.8)], [y_0 + hight, x_0 - (width * 0.8)], [(y_0 + (hight * 0.8)) - (float(thickness) / 2), x_0 - width], [y_0 + (hight * 0.8) - thickness - hight * 0.2, x_0 - (width * 0.8)], [y_0 + (hight * 0.8) - thickness, x_0 - (width * 0.8)], [y_0 + (hight * 0.8) - thickness, x_0 - thickness], [y_0, x_0 - thickness]]
                                         write_to_file(draw_polygon(arrow_coords,1,"#000000",0))
                                         plotted_TSS = True
+
 
 write_to_file("</svg>")
