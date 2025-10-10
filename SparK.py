@@ -13,7 +13,11 @@ import math
 import sys
 import subprocess
 import gzip
-
+try:
+    import pyBigWig
+except ImportError:
+    pyBigWig = None
+    
 def get_gene_name():
     return(line_split[8].split("gene_name ")[1].split('''"''')[1])
 def get_transcript_name():
@@ -57,20 +61,41 @@ def get_lines_stream(filename):
     If a data file is not tabix-indexed, go through it line by line.
     """
     if filename[-3:] == '.gz':
-        f = gzip.open(filename, 'r')
-        for line in f:
-            yield line.rstrip()
+        f = gzip.open(filename, 'rt')
     else:
         f = open(filename, 'r')
+    try:
         for line in f:
             yield line.rstrip()
-    f.close()
+    finally:
+        f.close()
 
 def make_raw_data_filled(stretch, files, offset):  # files[ctrl,treat]
     raw_data_filled = [[0] * (stretch[2] - stretch[1]) for r in range(len(files))]
     for a, datafile2 in enumerate(files):
-        # Check to see whether the file is tabix-indexed. If so, use index for
-        # faster processing
+        # BigWig support via pyBigWig
+        if datafile2.lower().endswith(('.bw', '.bigwig')):
+            if pyBigWig is None:
+                raise ImportError('pyBigWig library required for bigwig files')
+            bw = pyBigWig.open(datafile2)
+            chromname = stretch[0]
+            if chromname not in bw.chroms():
+                if 'chr' + chromname in bw.chroms():
+                    chromname = 'chr' + chromname
+            values = bw.values(chromname, stretch[1] + offset, stretch[2] + offset)
+            for idx, val in enumerate(values):
+                # Replace None or NaN with 0 to avoid broken polygons
+                if val is None:
+                    raw_data_filled[a][idx] = 0
+                else:
+                    try:
+                        raw_data_filled[a][idx] = 0 if math.isnan(val) else val
+                    except TypeError:
+                        raw_data_filled[a][idx] = 0
+            bw.close()
+            continue
+
+        # BedGraph/other line-based inputs (optionally via tabix)
         input_lines = None
         found_chromosome = False
         if os.path.isfile('{}.tbi'.format(datafile2)):
@@ -78,12 +103,10 @@ def make_raw_data_filled(stretch, files, offset):  # files[ctrl,treat]
             # Lines will already be in the specified interval.
             found_chromosome = True
         else:
-            print("WARNING: {} is not tabix-indexed.".format(datafile2), \
-                file=sys.stderr)
-            print("To speed up, compress with bgzip and index with tabix.", \
-                file=sys.stderr)
+            print("WARNING: {} is not tabix-indexed.".format(datafile2), file=sys.stderr)
+            print("To speed up, compress with bgzip and index with tabix.", file=sys.stderr)
             input_lines = get_lines_stream(datafile2)
-        
+
         for line in input_lines:
             line_split = line.split("\t")
             try:
@@ -112,7 +135,7 @@ def make_raw_data_filled(stretch, files, offset):  # files[ctrl,treat]
                                 pass
 
     # shrink to max_datapoints if bigger
-    max_datapoints = 2000
+    max_datapoints = max_points
     if stretch[2] - stretch[1] > max_datapoints:
         binfactor_split = math.modf(float((float(stretch[2] - stretch[1]))/max_datapoints))  # get values after and before period
         binfactor = sum(binfactor_split)
@@ -140,7 +163,7 @@ def make_raw_data_filled(stretch, files, offset):  # files[ctrl,treat]
         raw_data_filled = copy.deepcopy(temp_data)
 
     if smoothen_tracks is not None:
-        raw_data_filled_smooth = [[0] * 2000 for r in range(len(files))]
+        raw_data_filled_smooth = [[0] * max_datapoints for r in range(len(files))]
         for x, dataset in enumerate(raw_data_filled):
             temp = [dataset[0]] * smoothen_tracks
             for p, i in enumerate(dataset):
@@ -159,16 +182,15 @@ def get_max_value(datasets1, datasets2):
         plottingaverages = True
     max_1 = []
     for datafile1 in datasets1:
-        max_1.append(max(datafile1))
+        max_1.append(max([abs(v) for v in datafile1]))
     max_2 = []
     for datafile2 in datasets2:
-        max_2.append(max(datafile2))
+        max_2.append(max([abs(v) for v in datafile2]))
     if plottingaverages == True:
         if max_2 != []:
-            if max_2 != []:
-                return max([np.average(max_1), np.average(max_2)])
-            else:
-                return(np.average(max_1))
+            return max([np.average(max_1), np.average(max_2)])
+        else:
+            return(np.average(max_1))
     elif plottingaverages == False:
         if max_2 != []:
             return max([max(max_1), max(max_2)])
@@ -179,6 +201,10 @@ def get_relative_hight(raw_value): # FIX make sure maxvalue can be 0 too
         return(0)
     else:
         return((raw_value * hight * relative_track_hight_percentage) / max_value) # to not go up to the max
+def get_relative_hight_custom(raw_value, denom):
+    if raw_value == 0 or denom == 0:
+        return 0
+    return (raw_value * hight * relative_track_hight_percentage) / denom
 def draw_rect(x_coord, y_0, color, width, hight1, opacity):
     return '''<rect x="''' + str(x_coord) + '''" opacity="''' + str(opacity) + '''" y="''' + str(y_0 - hight1) + '''" fill="''' + color + '''" width="''' + str(width) + '''" height="''' + str(hight1) + '''"/>'''
 def draw_polygon(coordinates, opacity, color, stroke_width):
@@ -192,7 +218,40 @@ def draw_polygon(coordinates, opacity, color, stroke_width):
             string += " " + str(c[1]) + "," + str(c[0])
     string += '''" opacity="''' + str(opacity) + '''" fill="''' + color + '''"''' + ''' stroke="black" stroke-width="''' + str(stroke_width) + '''"/>'''
     return string
+def draw_axis_for_group(y_start_val, max_value_val, has_negative_axis):
+    axis_label = round(max_value_val * (1 + (1 - relative_track_hight_percentage)), 1)
+    if has_negative_axis:
+        write_to_file('''<line x1="''' + str(x_start - 10) + '''" y1="''' + str(y_start_val + hight) + '''" x2="''' + str(x_start - 10) + '''" y2="''' + str(y_start_val - hight) + '''" stroke="black" stroke-width="1" />''')
+        write_to_file('''<line x1="''' + str(x_start - 10.5) + '''" y1="''' + str(y_start_val) + '''" x2="''' + str(x_start - 6.5) + '''" y2="''' + str(y_start_val) + '''" stroke="black" stroke-width="1" />''')
+        write_to_file('''<line x1="''' + str(x_start - 10.5) + '''" y1="''' + str(y_start_val - hight) + '''" x2="''' + str(x_start - 6.5) + '''" y2="''' + str(y_start_val - hight) + '''" stroke="black" stroke-width="1" />''')
+        write_to_file('''<line x1="''' + str(x_start - 10.5) + '''" y1="''' + str(y_start_val + hight) + '''" x2="''' + str(x_start - 6.5) + '''" y2="''' + str(y_start_val + hight) + '''" stroke="black" stroke-width="1" />''')
+
+        write_to_file('''<text text-anchor="end" font-family="Arial" x="''' + str(x_start - 14) + '''" y="''' + str(y_start_val + hight + 4) + '''" font-size="''' + str(font_size_axis_y) + '''" >''' + str(-axis_label) + '''</text>''')
+        write_to_file('''<text text-anchor="end" font-family="Arial" x="''' + str(x_start - 14) + '''" y="''' + str(y_start_val + 4) + '''" font-size="''' + str(font_size_axis_y) + '''" >0</text>''')
+        write_to_file('''<text text-anchor="end" font-family="Arial" x="''' + str(x_start - 14) + '''" y="''' + str(y_start_val - hight + 4) + '''" font-size="''' + str(font_size_axis_y) + '''" >''' + str(axis_label) + '''</text>''')
+    else:
+        write_to_file('''<line x1="''' + str(x_start - 10) + '''" y1="''' + str(y_start_val) + '''" x2="''' + str(x_start - 10) + '''" y2="''' + str(y_start_val - hight) + '''" stroke="black" stroke-width="1" />''')
+        write_to_file('''<line x1="''' + str(x_start - 10.5) + '''" y1="''' + str(y_start_val) + '''" x2="''' + str(x_start - 6.5) + '''" y2="''' + str(y_start_val) + '''" stroke="black" stroke-width="1" />''')
+        write_to_file('''<line x1="''' + str(x_start - 10.5) + '''" y1="''' + str(y_start_val - hight) + '''" x2="''' + str(x_start - 6.5) + '''" y2="''' + str(y_start_val - hight) + '''" stroke="black" stroke-width="1" />''')
+
+        write_to_file('''<text text-anchor="end" font-family="Arial" x="''' + str(x_start - 14) + '''" y="''' + str(y_start_val + 4) + '''" font-size="''' + str(font_size_axis_y) + '''" >0</text>''')
+        write_to_file('''<text text-anchor="end" font-family="Arial" x="''' + str(x_start - 14) + '''" y="''' + str(y_start_val - hight + 4) + '''" font-size="''' + str(font_size_axis_y) + '''" >''' + str(axis_label) + '''</text>''')
+def draw_sine_axis_for_group(y_start_val, pos_max_value_val, neg_max_value_val):
+    # Separate top/bottom labels derived from positive and negative datasets
+    axis_label_top = round(pos_max_value_val * (1 + (1 - relative_track_hight_percentage)), 1)
+    axis_label_bottom = round(neg_max_value_val * (1 + (1 - relative_track_hight_percentage)), 1)
+    # Draw vertical axis
+    write_to_file('''<line x1="''' + str(x_start - 10) + '''" y1="''' + str(y_start_val + hight) + '''" x2="''' + str(x_start - 10) + '''" y2="''' + str(y_start_val - hight) + '''" stroke="black" stroke-width="1" />''')
+    # 0 tick
+    write_to_file('''<line x1="''' + str(x_start - 10.5) + '''" y1="''' + str(y_start_val) + '''" x2="''' + str(x_start - 6.5) + '''" y2="''' + str(y_start_val) + '''" stroke="black" stroke-width="1" />''')
+    # Top tick and label
+    write_to_file('''<line x1="''' + str(x_start - 10.5) + '''" y1="''' + str(y_start_val - hight) + '''" x2="''' + str(x_start - 6.5) + '''" y2="''' + str(y_start_val - hight) + '''" stroke="black" stroke-width="1" />''')
+    write_to_file('''<text text-anchor="end" font-family="Arial" x="''' + str(x_start - 14) + '''" y="''' + str(y_start_val - hight + 4) + '''" font-size="''' + str(font_size_axis_y) + '''" >''' + str(axis_label_top) + '''</text>''')
+    # Bottom tick and label
+    write_to_file('''<line x1="''' + str(x_start - 10.5) + '''" y1="''' + str(y_start_val + hight) + '''" x2="''' + str(x_start - 6.5) + '''" y2="''' + str(y_start_val + hight) + '''" stroke="black" stroke-width="1" />''')
+    write_to_file('''<text text-anchor="end" font-family="Arial" x="''' + str(x_start - 14) + '''" y="''' + str(y_start_val + hight + 4) + '''" font-size="''' + str(font_size_axis_y) + '''" >-''' + str(axis_label_bottom) + '''</text>''')
 def draw_standard_spark():
+    summary_func = np.max if point_stat == "max" else np.average
     if len(control_data) > 1 and len(treat_data) > 1:
         last_xpos = -1
         coords = []  # y/x, spark color
@@ -206,47 +265,49 @@ def draw_standard_spark():
             for p, i in enumerate(treat_data):
                 treat_values.append(treat_data[p][x])
 
+            ctrl_summary = summary_func(ctrl_values)
+            treat_summary = summary_func(treat_values)
             sum_std = np.std(ctrl_values) + np.std(treat_values)
-            if abs(np.average(ctrl_values) - np.average(treat_values)) > sum_std:
-                if np.average(ctrl_values) > np.average(treat_values):
+            if abs(ctrl_summary - treat_summary) > sum_std:
+                if ctrl_summary > treat_summary:
                     if last_value == "" or last_value == "up":
                         if (last_xpos + 1) == x:
-                            coords.append([get_relative_hight(np.average(ctrl_values) - np.std(ctrl_values)), x_pos])
-                            coords.insert(0, [get_relative_hight(np.average(treat_values) + np.std(treat_values)), x_pos])
+                            coords.append([get_relative_hight(ctrl_summary - np.std(ctrl_values)), x_pos])
+                            coords.insert(0, [get_relative_hight(treat_summary + np.std(treat_values)), x_pos])
                             last_xpos = x
                         else:
                             if len(coords) > 0:
                                 write_to_file(draw_polygon(coords, 0.8, spark_color[1], stroke_width_spark))
-                            coords = [[get_relative_hight(np.average(ctrl_values) - np.std(ctrl_values)), x_pos]]
-                            coords.insert(0, [get_relative_hight(np.average(treat_values) + np.std(treat_values)), x_pos])
+                            coords = [[get_relative_hight(ctrl_summary - np.std(ctrl_values)), x_pos]]
+                            coords.insert(0, [get_relative_hight(treat_summary + np.std(treat_values)), x_pos])
                             last_xpos = x
                             last_value = "up"
                     else:
                         if len(coords) > 0:
                             write_to_file(draw_polygon(coords, 0.8, spark_color[0], stroke_width_spark))
-                        coords = [[get_relative_hight(np.average(ctrl_values) - np.std(ctrl_values)), x_pos]]
-                        coords.insert(0, [get_relative_hight(np.average(treat_values) + np.std(treat_values)), x_pos])
+                        coords = [[get_relative_hight(ctrl_summary - np.std(ctrl_values)), x_pos]]
+                        coords.insert(0, [get_relative_hight(treat_summary + np.std(treat_values)), x_pos])
                         last_xpos = x
                         last_value = "up"
 
-                if np.average(ctrl_values) < np.average(treat_values):
+                if ctrl_summary < treat_summary:
                     if last_value == "" or last_value == "down":
                         if (last_xpos + 1) == x:
-                            coords.append([get_relative_hight(np.average(treat_values) - np.std(treat_values)), x_pos])
-                            coords.insert(0, [get_relative_hight(np.average(ctrl_values) + np.std(ctrl_values)), x_pos])
+                            coords.append([get_relative_hight(treat_summary - np.std(treat_values)), x_pos])
+                            coords.insert(0, [get_relative_hight(ctrl_summary + np.std(ctrl_values)), x_pos])
                             last_xpos = x
                         else:
                             if len(coords) > 0:
                                 write_to_file(draw_polygon(coords, 0.8, spark_color[0], stroke_width_spark))
-                            coords = [[get_relative_hight(np.average(treat_values) - np.std(treat_values)), x_pos]]
-                            coords.insert(0, [get_relative_hight(np.average(ctrl_values) + np.std(ctrl_values)), x_pos])
+                            coords = [[get_relative_hight(treat_summary - np.std(treat_values)), x_pos]]
+                            coords.insert(0, [get_relative_hight(ctrl_summary + np.std(ctrl_values)), x_pos])
                             last_xpos = x
                             last_value = "down"
                     else:
                         if len(coords) > 0:
                             write_to_file(draw_polygon(coords, 0.8, spark_color[1], stroke_width_spark))
-                        coords = [[get_relative_hight(np.average(treat_values) - np.std(treat_values)), x_pos]]
-                        coords.insert(0, [get_relative_hight(np.average(ctrl_values) + np.std(ctrl_values)), x_pos])
+                        coords = [[get_relative_hight(treat_summary - np.std(treat_values)), x_pos]]
+                        coords.insert(0, [get_relative_hight(ctrl_summary + np.std(ctrl_values)), x_pos])
                         last_xpos = x
                         last_value = "down"
         if len(coords) > 0:
@@ -272,7 +333,7 @@ parser.add_argument('-ps','--show_plots', help='choices: all, averages', require
 parser.add_argument('-pr','--region', help='example: chr1:1647389-272634', required=True, type=str)
 parser.add_argument('-cf','--control_files', help='separate by space', required=True, nargs='+', type=str)
 parser.add_argument('-tf','--treat_files', help='separate by space', required=False, nargs='+', type=str, default=[])
-parser.add_argument('-cg','--control_groups', help='group numbers separate by spacse', required=False, nargs='+', type=int, default=[])
+parser.add_argument('-cg','--control_groups', help='group numbers separate by space', required=False, nargs='+', type=int, default=[])
 parser.add_argument('-tg','--treat_groups', help='group numbers separate by space', required=False, nargs='+', type=int, default=[])
 parser.add_argument('-gl','--group_labels', help='set group labels', required=False, nargs='+', type=str)
 parser.add_argument('-l','--labels', help='set labels for controls and treatment', required=False, nargs='+', type=str)
@@ -294,6 +355,10 @@ parser.add_argument('-bedcol','--bed_color', help='colors of bed files in hex', 
 parser.add_argument('-bedlab','--bed_labels', help='set labels for bed tracks', required=False, nargs='+', type=str)
 parser.add_argument('-w','--track_width', help='width of the track, default = 150, int', required=False, type=int, default=150)
 parser.add_argument('-dg','--display_genes', help='genes to display from the gtf file', nargs='+', required=False, type=str)
+parser.add_argument('--max_points', help='maximum datapoints per plot', required=False, type=int, default=2000)
+parser.add_argument('--point_stat', help='per-point statistic: average or max', required=False, type=str, default='average')
+parser.add_argument('--y_scale', help='scale factor for y-axis', required=False, type=float, default=1.0)
+parser.add_argument('--x_scale', help='scale factor for x-axis', required=False, type=float, default=1.0)
 parser.add_argument('-dt','--display_transcripts', help='display custom transcripts. By default, all transcripts annotated in the gtf file will be merged and displayed as one gene. Alternatively all can be plotted seperatelly by setting this to "all". Further, Transcript IDs can be listed to plot only certain transcripts', nargs='+', required=False, type=str, default=["mergeall"])
 parser.add_argument('-wg','--write_genenames', help='write genename instead of transcript ID when transcripts are plotted. Set to "yes".', required=False, type=str, default="no")
 
@@ -304,7 +369,12 @@ print(" ")
 print('''SparK Version ''' + SparK_Version + ''' initiated''')
 
 # Additional Arguments #########################################
-hight = 30  # hight of plots
+# Additional Arguments #########################################
+x_scale = args['x_scale']
+y_scale = args['y_scale']
+hight = 30 * y_scale  # hight of plots
+font_size_axis_y = 8
+font_size_axis_x = 7
 x_start = 50
 spark_opacity = 1
 stroke_width = 0  # 0.1 stroke widths good
@@ -348,6 +418,8 @@ if bed_files is not None:
         bed_color = ["#0B34FF"] * len(bed_files)
 
 smoothen_tracks = args['smoothen']
+max_points = args['max_points']
+point_stat = args['point_stat']
 
 output_filename = args['output_name']
 if output_filename is None:
@@ -359,9 +431,9 @@ display_genes = args['display_genes']
 
 display_genestart = args['draw_genestart']
 
-width = args['track_width']
-if width is not None:
-    total_width = int(width)
+track_width_arg = args['track_width']
+if track_width_arg is not None:
+    total_width = int(track_width_arg * x_scale)
 
 fills = args['fills']  # [0] is control, [1] is treatment group
 if fills is None:
@@ -409,7 +481,7 @@ if show_plots not in ["all", "averages"]:
 elif show_plots == "averages":
     print("Plotting averages")
 
-elif show_plots == "standard":
+elif show_plots == "all":
     print("Plotting individual tracks")
 
 region = [args['region'].split(":")[0], int(args['region'].split(":")[1].split("-")[0]), int(args['region'].split(":")[1].split("-")[1])] # [chr, start, stop]
@@ -526,7 +598,7 @@ if os.path.exists(output_filename):
 
 #check how many genes will be plotted in that region to make file size correct... for the future
 hight_bed = 0
-write_to_file('''<svg viewBox="0 0 320 ''' + str(150 + (hight * 2 * nr_of_groups) + hight_bed) + '''" xmlns="http://www.w3.org/2000/svg">''')
+write_to_file('''<svg style="background:#ffffff" viewBox="0 0 320 ''' + str(150 + (hight * 2 * nr_of_groups) + hight_bed) + '''" xmlns="http://www.w3.org/2000/svg">''')
 
 # make list of files and global max - useful for autoscaling only ###########################################
 if group_autoscale == "yes":
@@ -557,11 +629,11 @@ if group_autoscale == "yes":
 #############################################################################################################
 
 
-# Plot NGS tracks
-if (region[2] - region[1]) <= 2000:
+# Plot NGS tracks␊
+if (region[2] - region[1]) <= max_points:
     quantile = float(total_width)/(region[2] - region[1])
 else:
-    quantile = float(total_width)/2000
+    quantile = float(total_width)/max_points
 additional_hight = 0
 
 for group in range(nr_of_groups):
@@ -580,6 +652,7 @@ for group in range(nr_of_groups):
     control_data = make_raw_data_filled(region, control_files, 0)
     treat_data = make_raw_data_filled(region, treat_files, 0)
 
+    has_negative = any(any(v < 0 for v in data)for data in control_data + treat_data)
 # here the max value for the group(plot) is determined
     if group_autoscale == "yes":
         if (group + 1) not in group_autoscale_excluded:
@@ -638,6 +711,9 @@ for group in range(nr_of_groups):
 
             draw_standard_spark()
 
+        # Draw y-axis for this group (standard)
+        draw_axis_for_group(y_start, max_value, has_negative)
+
     elif plot_type == "STD":
         if len(control_data) > 1 and len(treat_data) > 1:
             coords = []
@@ -667,16 +743,34 @@ for group in range(nr_of_groups):
 
             if spark == "yes":
                 draw_standard_spark()
+
+            # Draw y-axis for this group (STD)
+            draw_axis_for_group(y_start, max_value, has_negative)
         else:
             print("Error: STD plots require at least 2 control and treatment files per plot")
 
     elif plot_type == "sine": # treat points up, control points down #FIX combined with averages does not work
+        # Compute separate positive/negative maxima for independent axis labels and scaling
+        pos_max_value = 0
+        neg_max_value = 0
+        if treat_data:
+            pos_max_value = max(max(abs(v) for v in data) for data in treat_data)
+        if control_data:
+            neg_max_value = max(max(abs(v) for v in data) for data in control_data)
+        # Respect custom scales or group autoscale by overriding both sides equally
+        if custom_scales is not None and custom_scales[group] != "D":
+            pos_max_value = float(custom_scales[group])
+            neg_max_value = float(custom_scales[group])
+        elif group_autoscale == "yes" and ((group + 1) not in group_autoscale_excluded):
+            pos_max_value = max_value
+            neg_max_value = max_value
+
         if len(control_data) >= 1 and len(treat_data) >= 1:
             for datafile in control_data:
                 coords = []  # y, x
                 for x, value in enumerate(datafile):
                     x_pos = x_start + (x * quantile)
-                    coords.append([get_relative_hight(-value), x_pos])
+                    coords.append([-1 * get_relative_hight_custom(value, neg_max_value), x_pos])
                 coords[-1][0] = 0
                 coords[0][0] = 0
                 write_to_file(draw_polygon(coords, opacity, fills[0], stroke_width))
@@ -684,7 +778,7 @@ for group in range(nr_of_groups):
                 coords = []  # y, x
                 for x, value in enumerate(datafile):
                     x_pos = x_start + (x * quantile)
-                    coords.append([get_relative_hight(value), x_pos])
+                    coords.append([get_relative_hight_custom(value, pos_max_value), x_pos])
                 coords[-1][0] = 0
                 coords[0][0] = 0
                 write_to_file(draw_polygon(coords, opacity, fills[1], stroke_width))
@@ -763,17 +857,8 @@ for group in range(nr_of_groups):
                         write_to_file(draw_polygon(coords, 0.8, spark_color[1], stroke_width_spark))
         else:
             print("Error: no input files for treatment and/or control")
-
-# Draw axis and labels
-##################################################
-# Y scale bars
-    write_to_file('''<line x1="''' + str(x_start - 10) + '''" y1="''' + str(y_start) + '''" x2="''' + str(x_start - 10) + '''" y2="''' + str(y_start - hight) + '''" stroke="black" stroke-width="1" />''')
-    write_to_file('''<line x1="''' + str(x_start - 10.5) + '''" y1="''' + str(y_start) + '''" x2="''' + str(x_start - 6.5) + '''" y2="''' + str(y_start) + '''" stroke="black" stroke-width="1" />''')
-    write_to_file('''<line x1="''' + str(x_start - 10.5) + '''" y1="''' + str(y_start - hight) + '''" x2="''' + str(x_start - 6.5) + '''" y2="''' + str(y_start - hight) + '''" stroke="black" stroke-width="1" />''')
-
-# Y labels
-    write_to_file('''<text text-anchor="end" font-family="Arial" x="''' + str(x_start - 14) + '''" y="''' + str(y_start + 4) + '''" font-size="8" >0</text>''')
-    write_to_file('''<text text-anchor="end" font-family="Arial" x="''' + str(x_start - 14) + '''" y="''' + str(y_start - hight + 4) + '''" font-size="8" >''' + str(round(max_value*(1+(1-relative_track_hight_percentage)), 1)) + '''</text>''')
+        # Draw y-axis for this group (sine) with independent labels
+        draw_sine_axis_for_group(y_start, pos_max_value, neg_max_value)
 
 # Scalebar
 if display_scalebar == "yes":
@@ -804,7 +889,7 @@ if display_scalebar == "yes":
         scalebar_display += scalebar_units[counter]
 
     write_to_file(draw_rect(total_width + x_start - normalized_scalebar_width, 100-hight+8, "000000", normalized_scalebar_width, 1, 1))
-    write_to_file('''<text text-anchor="middle" font-family="Arial" x="''' + str(total_width + x_start - (normalized_scalebar_width/2)) + '''" y="''' + str(96-hight+8) + '''" font-size="7" >''' + scalebar_display + '''</text>''')
+    write_to_file('''<text text-anchor="middle" font-family="Arial" x="''' + str(total_width + x_start - (normalized_scalebar_width/2)) + '''" y="''' + str(96-hight+8) + '''" font-size="''' + str(font_size_axis_x) + '''" >''' + scalebar_display + '''</text>''')
 
 # Group labels
 if group_labels is not None:
@@ -834,22 +919,22 @@ if labels is not None:
 # chromosome location
 if args['display_chrom_location'] != "no":
     if args['display_chrom_location'] == "bottom_left":
-        y_value_chr_label = y_start + 9
+        y_value_chr_label = y_start + (hight if has_negative else 0) + 9
         x_value_chr_label = x_start - 10.5
         text_anchor = "start"
     elif args['display_chrom_location'] == "top_left":
-        y_value_chr_label = 66
+        y_value_chr_label = y_start - hight - 4
         x_value_chr_label = x_start - 10.5
         text_anchor = "start"
     elif args['display_chrom_location'] == "bottom_right":
-        y_value_chr_label = y_start + 9
-        x_value_chr_label = x_start + width
+        y_value_chr_label = y_start + (hight if has_negative else 0) + 9
+        x_value_chr_label = x_start + total_width
         text_anchor = "end"
     elif args['display_chrom_location'] == "top_right":
-        y_value_chr_label = 66
-        x_value_chr_label = x_start + width
+        y_value_chr_label = y_start - hight - 4
+        x_value_chr_label = x_start + total_width
         text_anchor = "end"
-    write_to_file('''<text text-anchor="''' + text_anchor + '''''''" font-family="Arial" x="''' + str(x_value_chr_label) + '''" y="''' + str(y_value_chr_label) + '''" font-size="7" >Chr''' + str(region[0]) + ''': ''' + str(f"{region[1]:,}") + '''-''' + str(f"{region[2]:,}") + '''</text>''')
+    write_to_file('''<text text-anchor="''' + text_anchor + '''''''" font-family="Arial" x="''' + str(x_value_chr_label) + '''" y="''' + str(y_value_chr_label) + '''" font-size="''' + str(font_size_axis_x) + '''" >Chr''' + str(region[0]) + ''': ''' + str(f"{region[1]:,}") + '''-''' + str(f"{region[2]:,}") + '''</text>''')
 
 # add bed files
 y_position_bed = 110 + (nr_of_groups - 1) * hight * 1.5 + additional_hight # dirty. y_position_bed is also start for gtf genes

@@ -1,0 +1,6 @@
+TestFiles/
+
+# Ignore local test artifacts and environments
+test-files/
+/.venv/
+/*.svg
