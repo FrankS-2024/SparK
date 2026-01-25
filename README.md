@@ -1,4 +1,4 @@
-# SparK - Publication quality and pipeline integratable NGS data plotting (Version 2.6.2)
+# SparK - Publication quality and pipeline integratable NGS data plotting (Version 3.0) Now with bigwig support!
 
 
 Please cite our article in bioRxiv, a citation can be downloaded here and imported in Endnote or such:
@@ -8,13 +8,10 @@ Feature requests are welcome! For help, bug reports, and to request features ple
 
 <img src="Images/Summary.png" width="900">
 
-Coming soon... interaction arcs for e.g. Hi-C, ChIA-PET, Hi-ChIP or any other interaction data! Preview:
-
-<img src="Images/InteractionArcs.png" width="400">
 
 Plot NGS bedgraph tracks including replicates, averaging of replicates, track overlay, standard deviations, and a smart scale bar. Output files are true high-resolution vector graphics (.svg), for easy editing and customization.
 
-This tool uses bedgraph files to generate the figures. To convert BAM files to bedgraph files, you can use deeptools, with "bamCoverage -b bamfile.bam -o outputfilename.bdg -bs 1 -of bedgraph". Make sure to use the "-bs 1" option. This should not be done for ChIP-seq data! For ChIP-seq, use the bedgraphs from the MACS2 output (or any other ChIP-seq pipeline). To convert bigwig (bw) files to bedgraph files you can use for instance the UCSC bigWigToBedGraph tool (https://genome.ucsc.edu/goldenpath/help/bigWig.html).
+This tool uses biwgwig or bedgraph files to generate the figures. To convert BAM files to bedgraph files, you can use deeptools, with "bamCoverage -b bamfile.bam -o outputfilename.bdg -bs 1 -of bedgraph". Make sure to use the "-bs 1" option. This should not be done for ChIP-seq data! For ChIP-seq, use the bedgraphs from the MACS2 output (or any other ChIP-seq pipeline). To convert bigwig (bw) files to bedgraph files you can use for instance the UCSC bigWigToBedGraph tool (https://genome.ucsc.edu/goldenpath/help/bigWig.html).
 
 For faster retrieval of data from regions of a bedgraph, compress your bedgraph files with [bgzip](http://www.htslib.org/doc/bgzip.html) and index them with [tabix](http://www.htslib.org/doc/tabix.html) using the command `tabix -p bed <filename>`.
 <pre>
@@ -250,8 +247,3 @@ but with "-wg yes".
 SparK will exctract gene and transcript information from column 3 of the gtf file. In particular, from rows which have "gene", "CDS", "exon", "transcript", and "start_codon" in column 2. Check if your gtf file labels these entries like that if some are missing or problems are encountert; e.g. your gtf file doesn't use for instance "mRNA" instead of "transcript". In the latter "mRNA" should be replaced with "transcript".
 Further, SparK expects the gene name, and transcript name to be in column 9 of the gtf file. It will try extract the information from ... ; gene_name "XXX"; ... and ... ; transcript_id "XXX"; ... . You can download a standard gtf file from the link mentioned above and have a look at how these gtf files are built. If encountering problems with your gtf file please check if those two entries are present in the same format. If not, download an updated version of your gtf files that includes these entries in the same format. If this is not available, e.g. when working with custom genomes, then there are two options: Either those entries need to be added to the file (e.g. with Excel), or, the SparK pyhton file can be easily modified to recognize other formats. Where Python extracts the gene name and transcript ID's is specified in the "get_gene_name" and "get_transcript_name" functions at the beginning of the script. Of note, the  entry transcript_ID is only neccecary if individual transcripts were to be plotted. If only genes are plotted, then a "gene_name" entry is enough in the gtf file.
 
-
-
-### Dealing with methylation data/my data has the wrong y-Axis/looks different than in IGV:
-If you are working with data that has very sharp and narrow peaks, like methylation data, or plotting larger regions with data that has sharp peaks you might encounter the following: The y-axis indicates lower values for your data than what you expected, and your data looks different from what you have seen in IGV. If you plot a large region like 100 kb, then you have more data points than pixels in your plot. There are different ways of dealing with this, and SparK will calculate the average signal for each pixel of the plot. Say you have to squeeze 10 data points into each pixel of the plot, and you only have one methylation site (one single base) with a value of 1.0 for a stretch of 10 bases, then you will end up with an average value of 0.1 for that one pixel in the SparK plot. IGV will show you a peak with 1.0. when in default setting. See the attached example. I have plotted a larger region of methylation data with IGV, you can see that the data ranges to 1.0, which is what you were expecting. However, the data is so highly clustered that it really doesn't tell you anything. See for instance the red square (1). If we zoom in once, we can notice that what looked as one massive block of methylation is actually two distinct sites (2). Further, both sites seem to have the same amount of methylation. If we zoom in again, we can see that those two sites are not the same at all, but in fact very different in amount of methylation that is present (3). So even zooming in once doesn't give us meaningful data in IGV yet. In SparK plots the values don't go up to 1, but SparK plots depict a meaningful representation of the data, even in the most zoomed out version.
-<img src="Images/methylation_example.png" width="900">
